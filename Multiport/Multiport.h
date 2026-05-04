@@ -28,9 +28,11 @@ private:
     uint32_t m_pendingCrystalUniqueNo;
     uint16_t m_pendingCrystalActIndex;
 
+    bool m_isFollower;
+
 public:
     const char* GetName(void) const override { return "Multiport"; }
-    const char* GetAuthor(void) const override { return "Your Name"; }
+    const char* GetAuthor(void) const override { return "Ushikai"; }
     const char* GetDescription(void) const override { return "Syncs homepoint teleports across multibox clients."; }
     const char* GetLink(void) const override { return ""; }
     double GetVersion(void) const override { return 1.0f; }

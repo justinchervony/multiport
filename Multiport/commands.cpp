@@ -18,6 +18,8 @@ bool Multiport::HandleCommand(int32_t mode, const char* command, bool injected)
     }
 
     uint16_t index = (uint16_t)atoi(args[1].c_str());
+    m_isFollower = injected;
+    pOutput->message_f("altport received - index:%d isFollower:%s", index, injected ? "true" : "false");
     TeleportToIndex(index);
     return true;
 }
@@ -80,9 +82,15 @@ bool Multiport::HandleOutgoingPacket(uint16_t id, uint32_t size, const uint8_t* 
         uint16_t index = *(uint16_t*)(data + 10);
         pOutput->message_f("0x05B confirm caught - index:%d", index);
 
-        char cmd[64];
-        sprintf_s(cmd, "/mso /altport %d", index);
-        m_AshitaCore->GetChatManager()->QueueCommand(1, cmd);
+        if (!m_isFollower) {
+            char cmd[64];
+            sprintf_s(cmd, "/mso /altport %d", index);
+            m_AshitaCore->GetChatManager()->QueueCommand(1, cmd);
+        }
+        else {
+            pOutput->message_f("0x05B confirm suppressed on follower - index:%d", index);
+        }
+        m_isFollower = false;
     }
 
     return false;
@@ -99,7 +107,7 @@ bool Multiport::HandleIncomingPacket(uint16_t id, uint32_t size, const uint8_t* 
 
     //if (id == 0x0033)
     //    return true;
-    if (id == 0x034 || id == 0x063)
+    if (m_isFollower && id == 0x034 || id == 0x063)
         return true;
 
     //pOutput->message_f("IN id:%03X size:%d", id, size);
