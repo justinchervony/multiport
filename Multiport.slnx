@@ -1,0 +1,8 @@
+<Solution>
+  <Configurations>
+    <Platform Name="Win32" />
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="Multiport/Multiport.vcxproj" Id="9ea7de1e-aeae-424c-ac56-73eb24f60adc" />
+</Solution>

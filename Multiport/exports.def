@@ -1,0 +1,4 @@
+LIBRARY Multiport
+EXPORTS
+    expCreatePlugin
+    expGetInterfaceVersion
