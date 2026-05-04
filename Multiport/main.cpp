@@ -28,6 +28,7 @@ bool Multiport::Initialize(IAshitaCore* core, ILogManager* logger, const uint32_
     m_pendingEndTick = 0;
     m_tickCount = 0;
     m_isFollower = false;
+    memset(m_homepointMasks, 0, sizeof(m_homepointMasks));
 
     pOutput->message("Multiport loaded successfully.");
     return true;

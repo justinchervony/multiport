@@ -26,9 +26,23 @@ bool Multiport::HandleCommand(int32_t mode, const char* command, bool injected)
 
 void Multiport::TeleportToIndex(uint16_t index)
 {
+    pOutput->message_f("HP mask[0]:%08X [1]:%08X [2]:%08X [3]:%08X",
+        m_homepointMasks[0], m_homepointMasks[1],
+        m_homepointMasks[2], m_homepointMasks[3]);
+
     if (index >= g_HPTableSize)
     {
         pOutput->message_f("TeleportToIndex: index %d out of range (max %d)", index, g_HPTableSize - 1);
+        m_isFollower = false;
+        return;
+    }
+
+    // Check if homepoint is unlocked
+    uint32_t word = m_homepointMasks[index / 32];
+    if (!((1 << (index % 32)) & word))
+    {
+        pOutput->message_f("TeleportToIndex: homepoint %d is not unlocked on this character.", index);
+        m_isFollower = false;
         return;
     }
 
@@ -38,6 +52,13 @@ void Multiport::TeleportToIndex(uint16_t index)
     uint16_t actIndex = (uint16_t)target->GetTargetIndex(0);
     uint32_t uniqueNo = entity->GetServerId(actIndex);
     uint32_t playerUniqueNo = entity->GetServerId(0);
+
+    if (uniqueNo == 0 || actIndex == 0)
+    {
+        pOutput->message("TeleportToIndex: No valid target. Please target a homepoint crystal.");
+        m_isFollower = false;
+        return;
+    }
 
     pOutput->message_f("TeleportToIndex: index:%d actIndex:%04X uniqueNo:%08X", index, actIndex, uniqueNo);
 
@@ -98,19 +119,29 @@ bool Multiport::HandleOutgoingPacket(uint16_t id, uint32_t size, const uint8_t* 
 
 bool Multiport::HandleIncomingPacket(uint16_t id, uint32_t size, const uint8_t* data, uint8_t* modified, uint32_t sizeChunk, const uint8_t* dataChunk, bool injected, bool blocked)
 {
-    UNREFERENCED_PARAMETER(data);
     UNREFERENCED_PARAMETER(modified);
     UNREFERENCED_PARAMETER(sizeChunk);
     UNREFERENCED_PARAMETER(dataChunk);
     UNREFERENCED_PARAMETER(injected);
     UNREFERENCED_PARAMETER(blocked);
 
-    //if (id == 0x0033)
-    //    return true;
-    if (m_isFollower && id == 0x034 || id == 0x063)
-        return true;
+    // Cache homepoint masks regardless of follower state
+    if (id == 0x063)
+    {
+        uint16_t type = *(uint16_t*)(data + 4);
+        if (type == 0x06)
+        {
+            memcpy(m_homepointMasks, data + 8, sizeof(m_homepointMasks));
+            pOutput->message_f("Homepoint masks cached.");
+        }
 
-    //pOutput->message_f("IN id:%03X size:%d", id, size);
+        // Only block the menu packet on followers
+        if (m_isFollower)
+            return true;
+    }
+
+    if (m_isFollower && id == 0x034)
+        return true;
 
     return false;
 }
@@ -170,5 +201,7 @@ void Multiport::Direct3DPresent(const RECT* a, const RECT* b, HWND c, const RGND
 
         pOutput->message_f("Sending confirm 0x05B for index:%d", m_pendingIndex);
         pPacket->addOutgoingPacket_s(0x05B, 20, eventend);
+
+        m_isFollower = false; // Sequence complete, restore manual control
     }
 }

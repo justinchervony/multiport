@@ -29,6 +29,7 @@ private:
     uint16_t m_pendingCrystalActIndex;
 
     bool m_isFollower;
+    uint32_t m_homepointMasks[4];
 
 public:
     const char* GetName(void) const override { return "Multiport"; }
