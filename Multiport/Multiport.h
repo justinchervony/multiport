@@ -30,6 +30,17 @@ private:
 
     bool m_isFollower;
     uint32_t m_homepointMasks[4];
+    uint32_t m_suppressConfirmCount;
+    bool m_broadcastSent;
+
+    bool m_pendingFollowerClear;
+    uint32_t m_pendingFollowerClearTick;
+
+    bool m_pendingZoneConfirm;
+
+    uint32_t m_retryCount;
+    uint32_t m_zoneTimeoutTick;
+    uint16_t m_retryIndex;
 
 public:
     const char* GetName(void) const override { return "Multiport"; }
@@ -47,7 +58,7 @@ public:
     bool HandleIncomingPacket(uint16_t id, uint32_t size, const uint8_t* data, uint8_t* modified, uint32_t sizeChunk, const uint8_t* dataChunk, bool injected, bool blocked) override;
     bool Direct3DInitialize(IDirect3DDevice8* device) override;
     void Direct3DPresent(const RECT* a, const RECT* b, HWND c, const RGNDATA* d) override;
-    void TeleportToIndex(uint16_t index);
+    void TeleportToIndex(uint16_t index, bool isRetry = false);
 };
 
 #endif
