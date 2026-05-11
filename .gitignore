@@ -32,6 +32,5 @@
 
 # Build Garbage
 .vs/*
-Debug/*
-Multiport/Debug/*
+**/Debug/*
 *.zip
