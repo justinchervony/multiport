@@ -29,9 +29,6 @@ private:
     uint16_t m_pendingCrystalActIndex;
 
     bool m_isFollower;
-    uint32_t m_homepointMasks[4];
-    uint32_t m_suppressConfirmCount;
-    bool m_broadcastSent;
 
     bool m_pendingFollowerClear;
     uint32_t m_pendingFollowerClearTick;
@@ -42,12 +39,16 @@ private:
     uint32_t m_zoneTimeoutTick;
     uint16_t m_retryIndex;
 
+    bool m_debugMode;
+
+    uint32_t m_homepointMasks[4];
+
 public:
     const char* GetName(void) const override { return "Multiport"; }
     const char* GetAuthor(void) const override { return "Ushikai"; }
     const char* GetDescription(void) const override { return "Syncs homepoint teleports across multibox clients."; }
     const char* GetLink(void) const override { return ""; }
-    double GetVersion(void) const override { return 1.0f; }
+    double GetVersion(void) const override { return 1.1f; }
     int32_t GetPriority(void) const override { return 0; }
     uint32_t GetFlags(void) const override { return (uint32_t)Ashita::PluginFlags::LegacyDirect3D; }
 

@@ -8,24 +8,48 @@ bool Multiport::HandleCommand(int32_t mode, const char* command, bool injected)
     std::vector<std::string> args;
     int argcount = Ashita::Commands::GetCommandArgs(command, &args);
 
-    if (_stricmp(args[0].c_str(), "/altport") != 0)
+    if (argcount < 1 || args.empty())
         return false;
+
+    if (_stricmp(args[0].c_str(), "/multiport") != 0 && _stricmp(args[0].c_str(), "/mp") != 0)
+        return false;
+
+    if (argcount >= 2 && _stricmp(args[1].c_str(), "stop") == 0)
+    {
+        m_pendingSelection = false;
+        m_pendingEventEnd = false;
+        m_pendingFollowerClear = false;
+        m_pendingZoneConfirm = false;
+        m_retryCount = 0;
+        m_isFollower = false;
+        pOutput->message("Multiport: teleport sequence cancelled.");
+        return true;
+    }
 
     if (argcount < 2)
     {
-        pOutput->message("Usage: /altport <index>");
+        pOutput->message("Usage: /multiport <index>");
+        return true;
+    }
+
+    if (argcount >= 2 && _stricmp(args[1].c_str(), "debug") == 0)
+    {
+        m_debugMode = !m_debugMode;
+        pOutput->message_f("Debug mode %s", m_debugMode ? "enabled" : "disabled");
         return true;
     }
 
     if (!injected)
     {
-        pOutput->message("Use the homepoint crystal directly. /altport is for alts only.");
+        pOutput->message("Use the homepoint crystal directly. /multiport is for alts only.");
         return true;
     }
 
     uint16_t index = (uint16_t)atoi(args[1].c_str());
     m_isFollower = injected;
-    pOutput->message_f("altport received - index:%d isFollower:%s", index, injected ? "true" : "false");
+    if (m_debugMode) {
+        pOutput->message_f("multiport received - index:%d isFollower:%s", index, injected ? "true" : "false");
+    }
     TeleportToIndex(index);
     return true;
 }
@@ -36,8 +60,6 @@ void Multiport::TeleportToIndex(uint16_t index, bool isRetry)
     m_pendingEventEnd = false;
     m_pendingFollowerClear = false;
 
-    m_suppressConfirmCount = 0;
-
     m_pendingZoneConfirm = false;
 
     uint16_t actIndex = 0;
@@ -47,6 +69,19 @@ void Multiport::TeleportToIndex(uint16_t index, bool isRetry)
 
     auto* entity = m_AshitaCore->GetMemoryManager()->GetEntity();
     auto* target = m_AshitaCore->GetMemoryManager()->GetTarget();
+
+    //Homepoint Mask validation block - not working. To-do
+    // 
+    //const uint8_t* masks = m_AshitaCore->GetMemoryManager()->GetPlayer()->GetHomepointMasks();
+    //if (m_debugMode)
+    //    pOutput->message_f("masks ptr:%p word:%08X", masks, masks ? *(uint32_t*)(masks) : 0);
+    //uint32_t word = *(uint32_t*)(masks + 4 * (index / 32));
+    //if (!((1 << (index % 32)) & word))
+    //{
+    //    pOutput->message_f("Homepoint %d not unlocked on this character.", index);
+    //    m_isFollower = false;
+    //    return;
+    //}
 
     if (!isRetry) {
         m_retryCount = 0;
@@ -69,7 +104,9 @@ void Multiport::TeleportToIndex(uint16_t index, bool isRetry)
             playerUniqueNo = m_pendingUniqueNo;
     }
 
-    pOutput->message_f("TeleportToIndex: index:%d actIndex:%04X uniqueNo:%08X", index, actIndex, uniqueNo);
+    if (m_debugMode) {
+        pOutput->message_f("TeleportToIndex: index:%d actIndex:%04X uniqueNo:%08X", index, actIndex, uniqueNo);
+    }
 
     // Send 0x001A - Interact with crystal
     uint8_t action[28] = { 0 };
@@ -88,7 +125,10 @@ void Multiport::TeleportToIndex(uint16_t index, bool isRetry)
     for (int i = 0; name[i] != '\0'; i++)
         nameHash = nameHash * 31 + name[i];
     uint32_t staggerOffset = (nameHash % 16) * 15;
-    pOutput->message_f("Stagger: name:%s hash:%u offset:%d finalTick:%d", name, nameHash, staggerOffset, m_tickCount + 30 + staggerOffset);
+
+    if (m_debugMode) {
+        pOutput->message_f("Stagger: name:%s hash:%u offset:%d finalTick:%d", name, nameHash, staggerOffset, m_tickCount + 30 + staggerOffset);
+    }
     m_pendingSelectionTick = m_tickCount + 30 + staggerOffset;
     m_pendingCrystalUniqueNo = uniqueNo;
     m_pendingCrystalActIndex = actIndex;
@@ -110,7 +150,7 @@ bool Multiport::HandleOutgoingPacket(uint16_t id, uint32_t size, const uint8_t* 
         {
             uint16_t index = *(uint16_t*)(data + 10);
             char cmd[64];
-            sprintf_s(cmd, "/mso /altport %d", index);
+            sprintf_s(cmd, "/mso /multiport %d", index);
             m_AshitaCore->GetChatManager()->QueueCommand(1, cmd);
         }
         m_isFollower = false;
@@ -126,32 +166,44 @@ bool Multiport::HandleIncomingPacket(uint16_t id, uint32_t size, const uint8_t* 
     UNREFERENCED_PARAMETER(injected);
     UNREFERENCED_PARAMETER(blocked);
 
-    //if (m_pendingZoneConfirm)
+    //if (m_pendingZoneConfirm && m_debugMode)
     //    pOutput->message_f("IN id:%03X size:%d", id, size);
+
+    if (id == 0x00A && m_pendingZoneConfirm)
+    {
+        uint16_t zoneNo = *(uint16_t*)(data + 48);
+        if (m_debugMode) pOutput->message_f("0x00A zone:%d target:%d", zoneNo, g_HPTable[m_retryIndex].zone);
+        if (zoneNo == g_HPTable[m_retryIndex].zone)
+        {
+            m_pendingZoneConfirm = false;
+            m_retryCount = 0;
+            if (m_debugMode) pOutput->message_f("Zone confirmed - teleport successful.");
+        }
+    }
 
 
     // Cache homepoint masks regardless of follower state
     if (id == 0x063)
     {
-        pOutput->message_f("0x063 received - isFollower:%s", m_isFollower ? "true" : "false");
-
-        uint16_t type = *(uint16_t*)(data + 4);
-        if (type == 0x06)
-        {
-            memcpy(m_homepointMasks, data + 8, sizeof(m_homepointMasks));
-            pOutput->message_f("Homepoint masks cached.");
+        if (m_debugMode) {
+            pOutput->message_f("0x063 received - isFollower:%s", m_isFollower ? "true" : "false");
         }
+
+        //Homepoint Mask check - not working
+        // 
+        //uint16_t type = *(uint16_t*)(data + 4);
+        //if (type == 0x06)
+        //{
+        //    memcpy(m_homepointMasks, data + 8, sizeof(m_homepointMasks));
+        //    if (m_debugMode)
+        //        pOutput->message_f("Masks: %08X %08X %08X %08X",
+        //            m_homepointMasks[0], m_homepointMasks[1],
+        //            m_homepointMasks[2], m_homepointMasks[3]);
+        //}
 
         // Only block the menu packet on followers
         if (m_isFollower)
             return true;
-    }
-
-    if (id == 0x0DF && m_pendingZoneConfirm)
-    {
-        m_pendingZoneConfirm = false;
-        m_retryCount = 0;
-        pOutput->message_f("Zone confirmed - teleport successful.");
     }
 
     if (m_isFollower && id == 0x034)
@@ -197,8 +249,9 @@ void Multiport::Direct3DPresent(const RECT* a, const RECT* b, HWND c, const RGND
         *(uint16_t*)(selection + 16) = (uint16_t)m_AshitaCore->GetMemoryManager()->GetEntity()->GetZoneId(0);
         *(uint16_t*)(selection + 18) = 0x21FC;
 
-        pOutput->message_f("Sending selection 0x05B for index:%d", m_pendingIndex);
-        m_suppressConfirmCount++;
+        if (m_debugMode) {
+            pOutput->message_f("Sending selection 0x05B for index:%d", m_pendingIndex);
+        }
         pPacket->addOutgoingPacket_s(0x05B, 20, selection);
 
         m_pendingEventEnd = true;
@@ -217,8 +270,9 @@ void Multiport::Direct3DPresent(const RECT* a, const RECT* b, HWND c, const RGND
         *(uint16_t*)(eventend + 16) = (uint16_t)m_AshitaCore->GetMemoryManager()->GetEntity()->GetZoneId(0);
         *(uint16_t*)(eventend + 18) = 0x21FC;
 
-        pOutput->message_f("Sending confirm 0x05B for index:%d", m_pendingIndex);
-        m_suppressConfirmCount++;
+        if (m_debugMode) {
+            pOutput->message_f("Sending confirm 0x05B for index:%d", m_pendingIndex);
+        }
         pPacket->addOutgoingPacket_s(0x05B, 20, eventend);
         m_pendingZoneConfirm = true;
         m_zoneTimeoutTick = m_tickCount + 300;
@@ -233,6 +287,7 @@ void Multiport::Direct3DPresent(const RECT* a, const RECT* b, HWND c, const RGND
         m_isFollower = false;
     }
 
+
     if (m_pendingZoneConfirm && m_tickCount >= m_zoneTimeoutTick)
     {
         if (m_retryCount >= 5)
@@ -243,7 +298,7 @@ void Multiport::Direct3DPresent(const RECT* a, const RECT* b, HWND c, const RGND
             m_isFollower = false;
             return;
         }
-        pOutput->message_f("No zone confirmation, retrying... attempt:%d", m_retryCount + 1);
+        pOutput->message_f("Retrying attempt:%d - If stuck, homepoint may not be unlocked. Type '/multiport stop' to cancel.", m_retryCount + 1);
         m_retryCount++;
         TeleportToIndex(m_retryIndex, true);
     }
