@@ -35,6 +35,7 @@ bool Multiport::Initialize(IAshitaCore* core, ILogManager* logger, const uint32_
     m_zoneTimeoutTick = 0;
     m_retryIndex = 0;
     m_debugMode = false;
+    m_lastEventPara = 0x21FC;
     memset(m_homepointMasks, 0, sizeof(m_homepointMasks));
 
     pOutput->message("Multiport loaded successfully.");

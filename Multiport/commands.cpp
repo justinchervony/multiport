@@ -46,6 +46,9 @@ bool Multiport::HandleCommand(int32_t mode, const char* command, bool injected)
     }
 
     uint16_t index = (uint16_t)atoi(args[1].c_str());
+    if (argcount >= 3)
+        m_lastEventPara = (uint16_t)strtol(args[2].c_str(), nullptr, 16);
+
     m_isFollower = injected;
     if (m_debugMode) {
         pOutput->message_f("multiport received - index:%d isFollower:%s", index, injected ? "true" : "false");
@@ -59,29 +62,14 @@ void Multiport::TeleportToIndex(uint16_t index, bool isRetry)
     m_pendingSelection = false;
     m_pendingEventEnd = false;
     m_pendingFollowerClear = false;
-
     m_pendingZoneConfirm = false;
 
     uint16_t actIndex = 0;
     uint32_t uniqueNo = 0;
     uint32_t playerUniqueNo = 0;
 
-
     auto* entity = m_AshitaCore->GetMemoryManager()->GetEntity();
     auto* target = m_AshitaCore->GetMemoryManager()->GetTarget();
-
-    //Homepoint Mask validation block - not working. To-do
-    // 
-    //const uint8_t* masks = m_AshitaCore->GetMemoryManager()->GetPlayer()->GetHomepointMasks();
-    //if (m_debugMode)
-    //    pOutput->message_f("masks ptr:%p word:%08X", masks, masks ? *(uint32_t*)(masks) : 0);
-    //uint32_t word = *(uint32_t*)(masks + 4 * (index / 32));
-    //if (!((1 << (index % 32)) & word))
-    //{
-    //    pOutput->message_f("Homepoint %d not unlocked on this character.", index);
-    //    m_isFollower = false;
-    //    return;
-    //}
 
     if (!isRetry) {
         m_retryCount = 0;
@@ -89,7 +77,7 @@ void Multiport::TeleportToIndex(uint16_t index, bool isRetry)
 
         actIndex = (uint16_t)target->GetTargetIndex(0);
         uniqueNo = entity->GetServerId(actIndex);
-        playerUniqueNo = entity->GetServerId(0);
+        playerUniqueNo = (uint32_t)m_AshitaCore->GetMemoryManager()->GetParty()->GetMemberServerId(0);
 
         if (uniqueNo == 0 || actIndex == 0)
         {
@@ -98,10 +86,11 @@ void Multiport::TeleportToIndex(uint16_t index, bool isRetry)
             return;
         }
     }
+
     else {
-            actIndex = m_pendingActIndex;
-            uniqueNo = m_pendingCrystalUniqueNo;
-            playerUniqueNo = m_pendingUniqueNo;
+        actIndex = m_pendingActIndex;
+        uniqueNo = m_pendingCrystalUniqueNo;
+        playerUniqueNo = m_pendingUniqueNo;
     }
 
     if (m_debugMode) {
@@ -146,11 +135,20 @@ bool Multiport::HandleOutgoingPacket(uint16_t id, uint32_t size, const uint8_t* 
 
     if (id == 0x05B && data[8] == 0x02 && *(uint16_t*)(data + 14) == 0x0000)
     {
+        m_lastEventPara = *(uint16_t*)(data + 18);
         if (!m_isFollower)
         {
             uint16_t index = *(uint16_t*)(data + 10);
+
+            if (m_debugMode) {
+                pOutput->message_f("0x05B out: index:%d UniqueNo:%08X EndPara:%08X ActIndex:%04X Mode:%04X EventNum:%04X EventPara: % 04X",
+                    index, *(uint32_t*)(data + 4), *(uint32_t*)(data + 8),
+                    *(uint16_t*)(data + 12), *(uint16_t*)(data + 14),
+                    *(uint16_t*)(data + 16), *(uint16_t*)(data + 18));
+            }
+
             char cmd[64];
-            sprintf_s(cmd, "/mso /multiport %d", index);
+            sprintf_s(cmd, "/mso /multiport %d %04X", index, m_lastEventPara);
             m_AshitaCore->GetChatManager()->QueueCommand(1, cmd);
         }
         m_isFollower = false;
@@ -166,9 +164,6 @@ bool Multiport::HandleIncomingPacket(uint16_t id, uint32_t size, const uint8_t* 
     UNREFERENCED_PARAMETER(injected);
     UNREFERENCED_PARAMETER(blocked);
 
-    //if (m_pendingZoneConfirm && m_debugMode)
-    //    pOutput->message_f("IN id:%03X size:%d", id, size);
-
     if (id == 0x00A && m_pendingZoneConfirm)
     {
         uint16_t zoneNo = *(uint16_t*)(data + 48);
@@ -181,27 +176,21 @@ bool Multiport::HandleIncomingPacket(uint16_t id, uint32_t size, const uint8_t* 
         }
     }
 
-
-    // Cache homepoint masks regardless of follower state
     if (id == 0x063)
     {
-        if (m_debugMode) {
+        if (m_debugMode)
             pOutput->message_f("0x063 received - isFollower:%s", m_isFollower ? "true" : "false");
+
+        uint16_t type = *(uint16_t*)(data + 4);
+        if (type == 0x06)
+        {
+            memcpy(m_homepointMasks, data + 8, sizeof(m_homepointMasks));
+            if (m_debugMode)
+                pOutput->message_f("Masks: %08X %08X %08X %08X",
+                    m_homepointMasks[0], m_homepointMasks[1],
+                    m_homepointMasks[2], m_homepointMasks[3]);
         }
 
-        //Homepoint Mask check - not working
-        // 
-        //uint16_t type = *(uint16_t*)(data + 4);
-        //if (type == 0x06)
-        //{
-        //    memcpy(m_homepointMasks, data + 8, sizeof(m_homepointMasks));
-        //    if (m_debugMode)
-        //        pOutput->message_f("Masks: %08X %08X %08X %08X",
-        //            m_homepointMasks[0], m_homepointMasks[1],
-        //            m_homepointMasks[2], m_homepointMasks[3]);
-        //}
-
-        // Only block the menu packet on followers
         if (m_isFollower)
             return true;
     }
@@ -245,13 +234,13 @@ void Multiport::Direct3DPresent(const RECT* a, const RECT* b, HWND c, const RGND
         *(uint32_t*)(selection + 4) = m_pendingUniqueNo;
         *(uint32_t*)(selection + 8) = 0x00000008;
         *(uint16_t*)(selection + 12) = m_pendingActIndex;
-        *(uint16_t*)(selection + 14) = 0x0001; // Mode
-        *(uint16_t*)(selection + 16) = (uint16_t)m_AshitaCore->GetMemoryManager()->GetEntity()->GetZoneId(0);
-        *(uint16_t*)(selection + 18) = 0x21FC;
+        *(uint16_t*)(selection + 14) = 0x0001;
+        *(uint16_t*)(selection + 16) = (uint16_t)m_AshitaCore->GetMemoryManager()->GetParty()->GetMemberZone(0);
+        *(uint16_t*)(selection + 18) = m_lastEventPara;
 
-        if (m_debugMode) {
+        if (m_debugMode)
             pOutput->message_f("Sending selection 0x05B for index:%d", m_pendingIndex);
-        }
+
         pPacket->addOutgoingPacket_s(0x05B, 20, selection);
 
         m_pendingEventEnd = true;
@@ -266,13 +255,19 @@ void Multiport::Direct3DPresent(const RECT* a, const RECT* b, HWND c, const RGND
         *(uint32_t*)(eventend + 4) = m_pendingUniqueNo;
         *(uint32_t*)(eventend + 8) = (uint32_t)m_pendingIndex << 16 | 0x0002;
         *(uint16_t*)(eventend + 12) = m_pendingActIndex;
-        *(uint16_t*)(eventend + 14) = 0x0000; // Mode should be 0 not 1
-        *(uint16_t*)(eventend + 16) = (uint16_t)m_AshitaCore->GetMemoryManager()->GetEntity()->GetZoneId(0);
-        *(uint16_t*)(eventend + 18) = 0x21FC;
+        *(uint16_t*)(eventend + 14) = 0x0000;
+        *(uint16_t*)(eventend + 16) = (uint16_t)m_AshitaCore->GetMemoryManager()->GetParty()->GetMemberZone(0);
+        *(uint16_t*)(eventend + 18) = m_lastEventPara;
 
         if (m_debugMode) {
             pOutput->message_f("Sending confirm 0x05B for index:%d", m_pendingIndex);
+            pOutput->message_f("eventend: UniqueNo:%08X EndPara:%08X ActIndex:%04X Mode:%04X EventNum:%04X EventPara:%04X",
+                *(uint32_t*)(eventend + 4), *(uint32_t*)(eventend + 8),
+                *(uint16_t*)(eventend + 12), *(uint16_t*)(eventend + 14),
+                *(uint16_t*)(eventend + 16), *(uint16_t*)(eventend + 18));
         }
+
+
         pPacket->addOutgoingPacket_s(0x05B, 20, eventend);
         m_pendingZoneConfirm = true;
         m_zoneTimeoutTick = m_tickCount + 300;
@@ -286,7 +281,6 @@ void Multiport::Direct3DPresent(const RECT* a, const RECT* b, HWND c, const RGND
         m_pendingFollowerClear = false;
         m_isFollower = false;
     }
-
 
     if (m_pendingZoneConfirm && m_tickCount >= m_zoneTimeoutTick)
     {

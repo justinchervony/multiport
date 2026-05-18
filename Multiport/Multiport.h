@@ -24,23 +24,17 @@ private:
     uint32_t m_pendingSelectionTick;
     uint32_t m_pendingEndTick;
     uint32_t m_tickCount;
-
     uint32_t m_pendingCrystalUniqueNo;
     uint16_t m_pendingCrystalActIndex;
-
     bool m_isFollower;
-
     bool m_pendingFollowerClear;
     uint32_t m_pendingFollowerClearTick;
-
     bool m_pendingZoneConfirm;
-
     uint32_t m_retryCount;
     uint32_t m_zoneTimeoutTick;
     uint16_t m_retryIndex;
-
     bool m_debugMode;
-
+    uint16_t m_lastEventPara;
     uint32_t m_homepointMasks[4];
 
 public:
