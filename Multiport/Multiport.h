@@ -26,6 +26,7 @@ private:
     uint32_t m_tickCount;
     uint32_t m_pendingCrystalUniqueNo;
     uint16_t m_pendingCrystalActIndex;
+    uint16_t m_pendingBroadcastIndex;
     bool m_isFollower;
     bool m_pendingFollowerClear;
     uint32_t m_pendingFollowerClearTick;
@@ -36,6 +37,9 @@ private:
     bool m_debugMode;
     uint16_t m_lastEventPara;
     uint32_t m_homepointMasks[4];
+    bool m_sameZoneTeleport;
+    bool m_broadcastSent;
+    bool m_sameZoneSent;
 
 public:
     const char* GetName(void) const override { return "Multiport"; }

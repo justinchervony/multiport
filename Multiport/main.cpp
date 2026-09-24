@@ -27,6 +27,7 @@ bool Multiport::Initialize(IAshitaCore* core, ILogManager* logger, const uint32_
     m_pendingSelectionTick = 0;
     m_pendingEndTick = 0;
     m_tickCount = 0;
+    m_pendingBroadcastIndex = 0;
     m_isFollower = false;
     m_pendingFollowerClear = false;
     m_pendingFollowerClearTick = 0;
@@ -37,6 +38,9 @@ bool Multiport::Initialize(IAshitaCore* core, ILogManager* logger, const uint32_
     m_debugMode = false;
     m_lastEventPara = 0x21FC;
     memset(m_homepointMasks, 0, sizeof(m_homepointMasks));
+    m_sameZoneTeleport = false;
+    m_broadcastSent = false;
+    m_sameZoneSent = false;
 
     pOutput->message("Multiport loaded successfully.");
     return true;

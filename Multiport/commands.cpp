@@ -63,6 +63,8 @@ void Multiport::TeleportToIndex(uint16_t index, bool isRetry)
     m_pendingEventEnd = false;
     m_pendingFollowerClear = false;
     m_pendingZoneConfirm = false;
+    m_broadcastSent = false;
+    m_sameZoneSent = false;
 
     uint16_t actIndex = 0;
     uint32_t uniqueNo = 0;
@@ -103,11 +105,31 @@ void Multiport::TeleportToIndex(uint16_t index, bool isRetry)
     *(uint16_t*)(action + 8) = actIndex;
     *(uint16_t*)(action + 10) = 0x0000;
     pPacket->addOutgoingPacket_s(0x001A, 28, action);
+    if (m_debugMode) {
+        pOutput->message_f("Sending 0x001A: actIndex:%04X uniqueNo:%08X", actIndex, uniqueNo);
+    }
 
     // Store values for delayed sends in Direct3DPresent
     m_pendingActIndex = actIndex;
     m_pendingUniqueNo = playerUniqueNo;
     m_pendingIndex = index;
+    uint16_t currentZone = (uint16_t)m_AshitaCore->GetMemoryManager()->GetParty()->GetMemberZone(0);
+    m_sameZoneTeleport = (g_HPTable[index].zone == currentZone);
+    m_pendingCrystalUniqueNo = uniqueNo;
+    m_pendingCrystalActIndex = actIndex;
+
+    if (m_debugMode) {
+        pOutput->message_f("sameZone:%s currentZone:%d targetZone:%d",
+            m_sameZoneTeleport ? "true" : "false", currentZone, g_HPTable[index].zone);
+    }
+
+    // Same-zone followers are driven entirely by the incoming-0x052 handler in
+    // HandleIncomingPacket, which sends 0x05C + confirm using the crystal/index data set
+    // above. Arming the generic tick-driven second interact + selection below would race
+    // that handler and re-trigger the crystal menu on the alt, so skip it here.
+    if (m_isFollower && m_sameZoneTeleport)
+        return;
+
     m_pendingSelection = true;
     const char* name = m_AshitaCore->GetMemoryManager()->GetParty()->GetMemberName(0);
     uint32_t nameHash = 0;
@@ -116,11 +138,11 @@ void Multiport::TeleportToIndex(uint16_t index, bool isRetry)
     uint32_t staggerOffset = (nameHash % 16) * 15;
 
     if (m_debugMode) {
-        pOutput->message_f("Stagger: name:%s hash:%u offset:%d finalTick:%d", name, nameHash, staggerOffset, m_tickCount + 30 + staggerOffset);
+        pOutput->message_f("Set m_pendingIndex to %d", m_pendingIndex);
+        pOutput->message_f("Stagger: name:%s hash:%u offset:%d finalTick:%d",
+            name, nameHash, staggerOffset, m_tickCount + 30 + staggerOffset);
     }
     m_pendingSelectionTick = m_tickCount + 30 + staggerOffset;
-    m_pendingCrystalUniqueNo = uniqueNo;
-    m_pendingCrystalActIndex = actIndex;
 }
 
 bool Multiport::HandleOutgoingPacket(uint16_t id, uint32_t size, const uint8_t* data, uint8_t* modified, uint32_t sizeChunk, const uint8_t* dataChunk, bool injected, bool blocked)
@@ -133,26 +155,44 @@ bool Multiport::HandleOutgoingPacket(uint16_t id, uint32_t size, const uint8_t* 
     if (injected)
         return false;
 
-    if (id == 0x05B && data[8] == 0x02 && *(uint16_t*)(data + 14) == 0x0000)
+    if (id == 0x05B && *(uint16_t*)(data + 14) == 0x0001)
+        m_broadcastSent = false;
+
+    if (m_debugMode && id == 0x05B)
+        pOutput->message_f("0x05B out: UniqueNo:%08X EndPara:%08X ActIndex:%04X Mode:%04X EventNum:%04X EventPara:%04X",
+            *(uint32_t*)(data + 4), *(uint32_t*)(data + 8),
+            *(uint16_t*)(data + 12), *(uint16_t*)(data + 14),
+            *(uint16_t*)(data + 16), *(uint16_t*)(data + 18));
+
+    // Real destination selection (Mode 0x0001, EndPara low word 0x0002): capture the
+    // index here for the eventual broadcast. The completion packet below never carries it.
+    if (id == 0x05B && data[8] == 0x02 && *(uint16_t*)(data + 14) == 0x0001)
     {
+        m_pendingBroadcastIndex = *(uint16_t*)(data + 10);
+    }
+
+    // Completion / broadcast trigger. Cross-zone completions carry data[8]==0x02 with
+    // EndPara identical to the selection packet (only Mode flips 0x0001 -> 0x0000).
+    // Same-zone completions carry data[8]==0x03 with EndPara zeroed out (no index).
+    // Both broadcast using the index captured from the selection packet above.
+    if (id == 0x05B && (data[8] == 0x02 || data[8] == 0x03) && *(uint16_t*)(data + 14) == 0x0000)
+    {
+        if (m_broadcastSent)
+            return false;
+        m_broadcastSent = true;
         m_lastEventPara = *(uint16_t*)(data + 18);
         if (!m_isFollower)
         {
-            uint16_t index = *(uint16_t*)(data + 10);
-
             if (m_debugMode) {
-                pOutput->message_f("0x05B out: index:%d UniqueNo:%08X EndPara:%08X ActIndex:%04X Mode:%04X EventNum:%04X EventPara: % 04X",
-                    index, *(uint32_t*)(data + 4), *(uint32_t*)(data + 8),
-                    *(uint16_t*)(data + 12), *(uint16_t*)(data + 14),
-                    *(uint16_t*)(data + 16), *(uint16_t*)(data + 18));
+                pOutput->message_f("Completion 0x05B (data[8]=%02X) - broadcasting index:%d", data[8], m_pendingBroadcastIndex);
             }
-
             char cmd[64];
-            sprintf_s(cmd, "/mso /multiport %d %04X", index, m_lastEventPara);
+            sprintf_s(cmd, "/mso /multiport %d %04X", m_pendingBroadcastIndex, m_lastEventPara);
             m_AshitaCore->GetChatManager()->QueueCommand(1, cmd);
         }
         m_isFollower = false;
     }
+
     return false;
 }
 
@@ -163,6 +203,14 @@ bool Multiport::HandleIncomingPacket(uint16_t id, uint32_t size, const uint8_t* 
     UNREFERENCED_PARAMETER(dataChunk);
     UNREFERENCED_PARAMETER(injected);
     UNREFERENCED_PARAMETER(blocked);
+
+    if (m_debugMode && m_isFollower)
+        pOutput->message_f("IN id:%03X size:%d", id, size);
+
+    if (m_debugMode && id == 0x05B)
+        pOutput->message_f("Incoming 0x05B - isFollower:%s sameZone:%s",
+            m_isFollower ? "true" : "false",
+            m_sameZoneTeleport ? "true" : "false");
 
     if (id == 0x00A && m_pendingZoneConfirm)
     {
@@ -198,6 +246,55 @@ bool Multiport::HandleIncomingPacket(uint16_t id, uint32_t size, const uint8_t* 
     if (m_isFollower && id == 0x034)
         return true;
 
+    if (m_isFollower && id == 0x052 && m_sameZoneTeleport && !m_sameZoneSent)
+    {
+        m_sameZoneSent = true;
+        auto* entity = m_AshitaCore->GetMemoryManager()->GetEntity();
+
+        if (m_debugMode) {
+            pOutput->message_f("Pending location for teleport: x:%.2f y:%.2f z:%.2f index:%d",
+                g_HPTable[m_pendingIndex].x,
+                g_HPTable[m_pendingIndex].y,
+                g_HPTable[m_pendingIndex].z,
+                m_pendingIndex);
+        }
+
+        // Send 0x05C first
+        uint8_t warp[32] = { 0 };
+        *(float*)(warp + 4) = g_HPTable[m_pendingIndex].x;
+        *(float*)(warp + 8) = g_HPTable[m_pendingIndex].y;
+        *(float*)(warp + 12) = g_HPTable[m_pendingIndex].z;
+        *(uint32_t*)(warp + 16) = m_pendingUniqueNo;
+        *(uint32_t*)(warp + 20) = (uint32_t)m_pendingIndex << 16 | 0x0003;
+        *(uint16_t*)(warp + 24) = (uint16_t)m_AshitaCore->GetMemoryManager()->GetParty()->GetMemberZone(0);
+        *(uint16_t*)(warp + 26) = m_lastEventPara;
+        *(uint16_t*)(warp + 28) = m_pendingActIndex;
+        *(uint8_t*)(warp + 30) = 0x01;
+        *(int8_t*)(warp + 31) = (int8_t)g_HPTable[m_pendingIndex].rot;
+        pPacket->addOutgoingPacket_s(0x05C, 32, warp);
+
+        // Then send 0x05B confirm
+        uint8_t eventend[20] = { 0 };
+        *(uint32_t*)(eventend + 4) = m_pendingUniqueNo;
+        *(uint32_t*)(eventend + 8) = 0x00000003;
+        *(uint16_t*)(eventend + 12) = m_pendingActIndex;
+        *(uint16_t*)(eventend + 14) = 0x0000;
+        *(uint16_t*)(eventend + 16) = (uint16_t)m_AshitaCore->GetMemoryManager()->GetParty()->GetMemberZone(0);
+        *(uint16_t*)(eventend + 18) = m_lastEventPara;
+        pPacket->addOutgoingPacket_s(0x05B, 20, eventend);
+
+        if (m_debugMode)
+            pOutput->message_f("Sent 0x05C + 0x05B confirm for same-zone");
+
+        // The generic Direct3DPresent flow is skipped for same-zone followers (see
+        // TeleportToIndex), so schedule the follower-clear here instead of relying on
+        // m_pendingEventEnd, which never gets armed on this path.
+        m_pendingFollowerClear = true;
+        m_pendingFollowerClearTick = m_tickCount + 600;
+
+        return true;
+    }
+
     if (m_isFollower && id == 0x05B)
         return true;
 
@@ -227,19 +324,27 @@ void Multiport::Direct3DPresent(const RECT* a, const RECT* b, HWND c, const RGND
         *(uint16_t*)(action + 8) = m_pendingCrystalActIndex;
         *(uint16_t*)(action + 10) = 0x0000;
         pPacket->addOutgoingPacket_s(0x001A, 28, action);
+        if (m_debugMode) {
+            pOutput->message_f("Sending 0x001A: actIndex:%04X uniqueNo:%08X", m_pendingCrystalActIndex, m_pendingCrystalUniqueNo);
+        }
 
         m_pendingSelection = false;
 
         uint8_t selection[20] = { 0 };
         *(uint32_t*)(selection + 4) = m_pendingUniqueNo;
-        *(uint32_t*)(selection + 8) = 0x00000008;
+        *(uint32_t*)(selection + 8) = m_sameZoneTeleport ? ((uint32_t)m_pendingIndex << 16 | 0x0002) : 0x00000008;
         *(uint16_t*)(selection + 12) = m_pendingActIndex;
         *(uint16_t*)(selection + 14) = 0x0001;
         *(uint16_t*)(selection + 16) = (uint16_t)m_AshitaCore->GetMemoryManager()->GetParty()->GetMemberZone(0);
         *(uint16_t*)(selection + 18) = m_lastEventPara;
 
-        if (m_debugMode)
+        if (m_debugMode) {
             pOutput->message_f("Sending selection 0x05B for index:%d", m_pendingIndex);
+            pOutput->message_f("selection: UniqueNo:%08X EndPara:%08X ActIndex:%04X Mode:%04X EventNum:%04X EventPara:%04X",
+                *(uint32_t*)(selection + 4), *(uint32_t*)(selection + 8),
+                *(uint16_t*)(selection + 12), *(uint16_t*)(selection + 14),
+                *(uint16_t*)(selection + 16), *(uint16_t*)(selection + 18));
+        }
 
         pPacket->addOutgoingPacket_s(0x05B, 20, selection);
 
@@ -251,26 +356,26 @@ void Multiport::Direct3DPresent(const RECT* a, const RECT* b, HWND c, const RGND
     {
         m_pendingEventEnd = false;
 
-        uint8_t eventend[20] = { 0 };
-        *(uint32_t*)(eventend + 4) = m_pendingUniqueNo;
-        *(uint32_t*)(eventend + 8) = (uint32_t)m_pendingIndex << 16 | 0x0002;
-        *(uint16_t*)(eventend + 12) = m_pendingActIndex;
-        *(uint16_t*)(eventend + 14) = 0x0000;
-        *(uint16_t*)(eventend + 16) = (uint16_t)m_AshitaCore->GetMemoryManager()->GetParty()->GetMemberZone(0);
-        *(uint16_t*)(eventend + 18) = m_lastEventPara;
+        if (!m_sameZoneTeleport)
+        {
+            uint8_t eventend[20] = { 0 };
+            *(uint32_t*)(eventend + 4) = m_pendingUniqueNo;
+            *(uint32_t*)(eventend + 8) = (uint32_t)m_pendingIndex << 16 | 0x0002;
+            *(uint16_t*)(eventend + 12) = m_pendingActIndex;
+            *(uint16_t*)(eventend + 14) = 0x0000;
+            *(uint16_t*)(eventend + 16) = (uint16_t)m_AshitaCore->GetMemoryManager()->GetParty()->GetMemberZone(0);
+            *(uint16_t*)(eventend + 18) = m_lastEventPara;
 
-        if (m_debugMode) {
-            pOutput->message_f("Sending confirm 0x05B for index:%d", m_pendingIndex);
-            pOutput->message_f("eventend: UniqueNo:%08X EndPara:%08X ActIndex:%04X Mode:%04X EventNum:%04X EventPara:%04X",
-                *(uint32_t*)(eventend + 4), *(uint32_t*)(eventend + 8),
-                *(uint16_t*)(eventend + 12), *(uint16_t*)(eventend + 14),
-                *(uint16_t*)(eventend + 16), *(uint16_t*)(eventend + 18));
+            if (m_debugMode)
+                pOutput->message_f("eventend: UniqueNo:%08X EndPara:%08X ActIndex:%04X Mode:%04X EventNum:%04X EventPara:%04X",
+                    *(uint32_t*)(eventend + 4), *(uint32_t*)(eventend + 8),
+                    *(uint16_t*)(eventend + 12), *(uint16_t*)(eventend + 14),
+                    *(uint16_t*)(eventend + 16), *(uint16_t*)(eventend + 18));
+
+            pPacket->addOutgoingPacket_s(0x05B, 20, eventend);
+            m_pendingZoneConfirm = true;
+            m_zoneTimeoutTick = m_tickCount + 300;
         }
-
-
-        pPacket->addOutgoingPacket_s(0x05B, 20, eventend);
-        m_pendingZoneConfirm = true;
-        m_zoneTimeoutTick = m_tickCount + 300;
 
         m_pendingFollowerClear = true;
         m_pendingFollowerClearTick = m_tickCount + 600;
