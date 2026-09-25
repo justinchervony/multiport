@@ -35,6 +35,10 @@ bool Multiport::Initialize(IAshitaCore* core, ILogManager* logger, const uint32_
     m_retryCount = 0;
     m_zoneTimeoutTick = 0;
     m_retryIndex = 0;
+    m_pendingSameZoneInteract = false;
+    m_pendingSameZoneInteractTick = 0;
+    m_pendingSameZoneConfirm = false;
+    m_sameZoneTimeoutTick = 0;
     m_debugMode = false;
     m_lastEventPara = 0x21FC;
     memset(m_homepointMasks, 0, sizeof(m_homepointMasks));

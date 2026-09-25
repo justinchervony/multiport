@@ -34,6 +34,10 @@ private:
     uint32_t m_retryCount;
     uint32_t m_zoneTimeoutTick;
     uint16_t m_retryIndex;
+    bool m_pendingSameZoneInteract;
+    uint32_t m_pendingSameZoneInteractTick;
+    bool m_pendingSameZoneConfirm;
+    uint32_t m_sameZoneTimeoutTick;
     bool m_debugMode;
     uint16_t m_lastEventPara;
     uint32_t m_homepointMasks[4];

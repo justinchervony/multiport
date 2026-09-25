@@ -20,6 +20,8 @@ bool Multiport::HandleCommand(int32_t mode, const char* command, bool injected)
         m_pendingEventEnd = false;
         m_pendingFollowerClear = false;
         m_pendingZoneConfirm = false;
+        m_pendingSameZoneInteract = false;
+        m_pendingSameZoneConfirm = false;
         m_retryCount = 0;
         m_isFollower = false;
         pOutput->message("Multiport: teleport sequence cancelled.");
@@ -65,6 +67,8 @@ void Multiport::TeleportToIndex(uint16_t index, bool isRetry)
     m_pendingZoneConfirm = false;
     m_broadcastSent = false;
     m_sameZoneSent = false;
+    m_pendingSameZoneInteract = false;
+    m_pendingSameZoneConfirm = false;
 
     uint16_t actIndex = 0;
     uint32_t uniqueNo = 0;
@@ -99,16 +103,6 @@ void Multiport::TeleportToIndex(uint16_t index, bool isRetry)
         pOutput->message_f("TeleportToIndex: index:%d actIndex:%04X uniqueNo:%08X", index, actIndex, uniqueNo);
     }
 
-    // Send 0x001A - Interact with crystal
-    uint8_t action[28] = { 0 };
-    *(uint32_t*)(action + 4) = uniqueNo;
-    *(uint16_t*)(action + 8) = actIndex;
-    *(uint16_t*)(action + 10) = 0x0000;
-    pPacket->addOutgoingPacket_s(0x001A, 28, action);
-    if (m_debugMode) {
-        pOutput->message_f("Sending 0x001A: actIndex:%04X uniqueNo:%08X", actIndex, uniqueNo);
-    }
-
     // Store values for delayed sends in Direct3DPresent
     m_pendingActIndex = actIndex;
     m_pendingUniqueNo = playerUniqueNo;
@@ -123,20 +117,40 @@ void Multiport::TeleportToIndex(uint16_t index, bool isRetry)
             m_sameZoneTeleport ? "true" : "false", currentZone, g_HPTable[index].zone);
     }
 
-    // Same-zone followers are driven entirely by the incoming-0x052 handler in
-    // HandleIncomingPacket, which sends 0x05C + confirm using the crystal/index data set
-    // above. Arming the generic tick-driven second interact + selection below would race
-    // that handler and re-trigger the crystal menu on the alt, so skip it here.
-    if (m_isFollower && m_sameZoneTeleport)
-        return;
-
-    m_pendingSelection = true;
     const char* name = m_AshitaCore->GetMemoryManager()->GetParty()->GetMemberName(0);
     uint32_t nameHash = 0;
     for (int i = 0; name[i] != '\0'; i++)
         nameHash = nameHash * 31 + name[i];
     uint32_t staggerOffset = (nameHash % 16) * 15;
 
+    if (m_isFollower && m_sameZoneTeleport)
+    {
+        // Same-zone followers stagger their own initial interact the same way cross-zone
+        // staggers its second interact/selection, so multiple alts interacting with the
+        // crystal at once don't overload however many the server can service per tick.
+        // Everything after the interact lands is driven by the incoming-0x052 handler in
+        // HandleIncomingPacket; the generic pendingSelection machinery below is cross-zone
+        // only and must stay skipped here or it will race that handler.
+        m_pendingSameZoneInteract = true;
+        m_pendingSameZoneInteractTick = m_tickCount + staggerOffset;
+        if (m_debugMode) {
+            pOutput->message_f("Same-zone: staggering interact - name:%s hash:%u offset:%d finalTick:%d",
+                name, nameHash, staggerOffset, m_pendingSameZoneInteractTick);
+        }
+        return;
+    }
+
+    // Send 0x001A - Interact with crystal
+    uint8_t action[28] = { 0 };
+    *(uint32_t*)(action + 4) = uniqueNo;
+    *(uint16_t*)(action + 8) = actIndex;
+    *(uint16_t*)(action + 10) = 0x0000;
+    pPacket->addOutgoingPacket_s(0x001A, 28, action);
+    if (m_debugMode) {
+        pOutput->message_f("Sending 0x001A: actIndex:%04X uniqueNo:%08X", actIndex, uniqueNo);
+    }
+
+    m_pendingSelection = true;
     if (m_debugMode) {
         pOutput->message_f("Set m_pendingIndex to %d", m_pendingIndex);
         pOutput->message_f("Stagger: name:%s hash:%u offset:%d finalTick:%d",
@@ -295,6 +309,18 @@ bool Multiport::HandleIncomingPacket(uint16_t id, uint32_t size, const uint8_t* 
         return true;
     }
 
+    // The real confirmation that the same-zone warp actually landed (not just that we sent
+    // it) is this server echo of the coordinates — same role 0x00A plays for cross-zone.
+    // Left unblocked so the client still applies the position update; if this never
+    // arrives, the timeout/retry in Direct3DPresent takes over.
+    if (m_isFollower && id == 0x065 && m_pendingSameZoneConfirm)
+    {
+        m_pendingSameZoneConfirm = false;
+        m_retryCount = 0;
+        if (m_debugMode)
+            pOutput->message_f("0x065 received - same-zone teleport confirmed");
+    }
+
     if (m_isFollower && id == 0x05B)
         return true;
 
@@ -315,6 +341,26 @@ void Multiport::Direct3DPresent(const RECT* a, const RECT* b, HWND c, const RGND
     UNREFERENCED_PARAMETER(d);
 
     m_tickCount++;
+
+    if (m_pendingSameZoneInteract && m_tickCount >= m_pendingSameZoneInteractTick)
+    {
+        m_pendingSameZoneInteract = false;
+
+        uint8_t action[28] = { 0 };
+        *(uint32_t*)(action + 4) = m_pendingCrystalUniqueNo;
+        *(uint16_t*)(action + 8) = m_pendingCrystalActIndex;
+        *(uint16_t*)(action + 10) = 0x0000;
+        pPacket->addOutgoingPacket_s(0x001A, 28, action);
+        if (m_debugMode) {
+            pOutput->message_f("Sending staggered same-zone 0x001A: actIndex:%04X uniqueNo:%08X", m_pendingCrystalActIndex, m_pendingCrystalUniqueNo);
+        }
+
+        // Watch for the incoming-0x052 handler to confirm within the window below; if the
+        // interact gets lost to server-side contention (multiple alts at once), nothing
+        // else will ever fire, so this is the only thing that notices and retries.
+        m_pendingSameZoneConfirm = true;
+        m_sameZoneTimeoutTick = m_tickCount + 300;
+    }
 
     if (m_pendingSelection && m_tickCount >= m_pendingSelectionTick)
     {
@@ -398,6 +444,22 @@ void Multiport::Direct3DPresent(const RECT* a, const RECT* b, HWND c, const RGND
             return;
         }
         pOutput->message_f("Retrying attempt:%d - If stuck, homepoint may not be unlocked. Type '/multiport stop' to cancel.", m_retryCount + 1);
+        m_retryCount++;
+        TeleportToIndex(m_retryIndex, true);
+    }
+
+    if (m_pendingSameZoneConfirm && m_tickCount >= m_sameZoneTimeoutTick)
+    {
+        m_pendingSameZoneConfirm = false;
+
+        if (m_retryCount >= 5)
+        {
+            pOutput->message("Same-zone teleport failed after 5 attempts.");
+            m_retryCount = 0;
+            m_isFollower = false;
+            return;
+        }
+        pOutput->message_f("Retrying same-zone attempt:%d - If stuck, homepoint may not be unlocked. Type '/multiport stop' to cancel.", m_retryCount + 1);
         m_retryCount++;
         TeleportToIndex(m_retryIndex, true);
     }
